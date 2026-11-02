@@ -1,7 +1,6 @@
 function copyWithTextarea(value) {
   const area = document.createElement('textarea')
   area.value = value
-  area.setAttribute('readonly', '')
   area.style.cssText = 'position:fixed;top:0;left:0;width:200px;height:40px;padding:0;border:0;outline:0;box-shadow:none;background:transparent;opacity:0.01;font-size:12px'
   document.body.appendChild(area)
   area.focus({ preventScroll: true })

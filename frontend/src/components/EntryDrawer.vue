@@ -1,7 +1,7 @@
 <script setup>
 import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue'
-import { NButton, NDrawer, NDrawerContent, NPopconfirm, NTag, NTooltip, useMessage } from 'naive-ui'
-import { Clipboard, Eye, EyeOff, Pencil, Trash2 } from 'lucide-vue-next'
+import { NButton, NDrawer, NDrawerContent, NPopconfirm, NTag, useMessage } from 'naive-ui'
+import { Eye, EyeOff, Pencil, Trash2 } from 'lucide-vue-next'
 import { api } from '../api'
 import { copyText } from '../clipboard'
 import { parseTable } from '../tableField'
@@ -72,6 +72,14 @@ async function remove() {
   }
 }
 
+async function copyValue(text) {
+  try {
+    if (await copyText(text)) message.success('已复制')
+  } catch (error) {
+    message.error(error.message)
+  }
+}
+
 async function copyField(field) {
   if (field.is_sensitive) {
     if (!field.has_value) {
@@ -85,11 +93,7 @@ async function copyField(field) {
     message.warning('该字段没有值')
     return
   }
-  try {
-    if (await copyText(field.value)) message.success('已复制')
-  } catch (error) {
-    message.error(error.message)
-  }
+  await copyValue(field.value)
 }
 
 function formatDate(value) {
@@ -102,7 +106,7 @@ function tableRows(field) {
 </script>
 
 <template>
-  <n-drawer :show="show" width="min(580px, 100vw)" placement="right" @update:show="(value) => { if (!value) emit('close') }">
+  <n-drawer :show="show" :trap-focus="false" width="min(780px, 100vw)" placement="right" @update:show="(value) => { if (!value) emit('close') }">
     <n-drawer-content :title="entry?.title || '条目详情'" closable>
       <template v-if="entry">
         <div class="detail-meta">
@@ -133,7 +137,6 @@ function tableRows(field) {
           <div v-for="field in entry.fields" :key="field.id" class="detail-field">
             <div class="detail-label">
               {{ field.label }}
-              <button class="icon-button compact" :aria-label="'复制 ' + field.label" @click="copyField(field)"><clipboard :size="14" /></button>
               <template v-if="field.is_sensitive && field.has_value && entry.can_edit">
                 <button v-if="revealed[field.id]" class="icon-button compact" aria-label="隐藏敏感值" @click="delete revealed[field.id]"><eye-off :size="14" /></button>
                 <button v-else class="icon-button compact" aria-label="显示敏感值" @click="reveal(field, 'view')"><eye :size="14" /></button>
@@ -150,11 +153,11 @@ function tableRows(field) {
             </div>
             <div v-else-if="field.is_sensitive" class="secret-line">
               <span v-if="!field.has_value" class="muted">未设置</span>
-              <span v-else-if="revealed[field.id]" class="secret-value">{{ revealed[field.id] }}</span>
-              <span v-else class="secret-mask">●●●●●●</span>
+              <span v-else-if="revealed[field.id]" class="secret-value copyable" title="点击复制" @click="copyValue(revealed[field.id])">{{ revealed[field.id] }}</span>
+              <span v-else class="secret-mask copyable" title="点击复制" @click="copyField(field)">●●●●●●</span>
             </div>
             <a v-else-if="field.field_type === 'url' && field.value" class="detail-link" :href="field.value" target="_blank" rel="noopener noreferrer">{{ field.value }}</a>
-            <div v-else class="detail-value" :class="{ muted: !field.value }">{{ field.value || '—' }}</div>
+            <div v-else class="detail-value" :class="{ muted: !field.value, copyable: field.value }" :title="field.value ? '点击复制' : ''" @click="copyField(field)">{{ field.value || '—' }}</div>
           </div>
         </template>
         <div class="detail-section-title">记录</div>

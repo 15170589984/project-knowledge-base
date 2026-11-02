@@ -161,8 +161,9 @@ h1, h2, h3 { font-weight: 650; }
 .detail-section-title { border-bottom: 1px solid #e8eeea; margin: 25px 0 7px; padding-bottom: 11px; color: #2f4939; font-size: 12px; font-weight: 710; }
 .detail-field { padding: 13px 0; border-bottom: 1px solid #f0f3f1; }
 .detail-label { display: flex; align-items: center; gap: 6px; color: #8b9a90; font-size: 10px; margin-bottom: 7px; }
-.field-head { display: flex; align-items: center; gap: 4px; min-width: 0; }
 .detail-value, .secret-value { color: #2f4037; font-size: 13px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.copyable { cursor: pointer; }
+.copyable:hover { color: #16866b; }
 .secret-line { display: flex; align-items: center; gap: 7px; }
 .secret-mask { font-size: 14px; color: #53665d; }
 .detail-link { display: inline-flex; align-items: center; gap: 6px; color: #16866b; font-size: 12px; overflow-wrap: anywhere; }

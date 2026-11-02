@@ -381,25 +381,6 @@ async function revealCell(entry, field, purpose) {
   }
 }
 
-async function copyFieldColumn(label) {
-  const values = []
-  for (const entry of items.value) {
-    for (const field of entry.fields.filter((item) => item.label === label)) {
-      const text = field.is_sensitive ? revealedCells[entry.id + ':' + field.id] : field.value
-      if (text) values.push(text)
-    }
-  }
-  if (!values.length) {
-    message.warning('当前页没有可复制的值，敏感字段需先显示')
-    return
-  }
-  try {
-    if (await copyText(values.join('\n'))) message.success(`已复制 ${values.length} 个值`)
-  } catch (cause) {
-    message.error(cause.message)
-  }
-}
-
 function fieldCell(entry, field) {
   const value = field.value
   if (field.is_sensitive) {
@@ -457,29 +438,25 @@ const columns = computed(() => {
         entry.content ? h('span', { class: 'muted truncate' }, entry.content) : null,
       ]),
     },
-    {
-      title: '类型',
-      key: 'kind',
-      width: 84,
-      render: (entry) => h(NTag, { size: 'small', bordered: false, type: KIND_TAG_TYPES[entry.kind] || 'default' }, { default: () => KIND_LABELS[entry.kind] || '条目' }),
-    },
   ]
   if (!projectId.value) result.push({ title: '项目', key: 'project_name', minWidth: 140 })
+  result.push({
+    title: '环境',
+    key: 'environment',
+    width: 90,
+    render: (entry) => entry.environment ? h(NTag, { size: 'small', bordered: false }, { default: () => entry.environment }) : h('span', { class: 'muted' }, '—'),
+  })
+  result.push({
+    title: '类型',
+    key: 'kind',
+    width: 84,
+    render: (entry) => h(NTag, { size: 'small', bordered: false, type: KIND_TAG_TYPES[entry.kind] || 'default' }, { default: () => KIND_LABELS[entry.kind] || '条目' }),
+  })
   if (!categoryId.value) result.push({ title: '分类', key: 'category_name', minWidth: 130 })
   const labels = [...new Set(items.value.flatMap((entry) => entry.fields.map((field) => field.label)))]
   for (const label of labels) {
     result.push({
-      title: () => h('div', { class: 'field-head' }, [
-        h('span', { class: 'truncate' }, label),
-        h(NTooltip, null, {
-          trigger: () => h('button', {
-            class: 'icon-button compact',
-            'aria-label': '复制字段 ' + label,
-            onClick: (event) => { event.stopPropagation(); copyFieldColumn(label) },
-          }, [h(Clipboard, { size: 14 })]),
-          default: () => '复制当前页该字段的值',
-        }),
-      ]),
+      title: label,
       key: 'field:' + label,
       minWidth: 170,
       render: (entry) => {
@@ -488,12 +465,6 @@ const columns = computed(() => {
       },
     })
   }
-  result.push({
-    title: '环境',
-    key: 'environment',
-    width: 90,
-    render: (entry) => entry.environment ? h(NTag, { size: 'small', bordered: false }, { default: () => entry.environment }) : h('span', { class: 'muted' }, '—'),
-  })
   result.push({
     title: '更新时间',
     key: 'updated_at',

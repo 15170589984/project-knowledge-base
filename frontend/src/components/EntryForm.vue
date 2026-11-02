@@ -1,6 +1,6 @@
 <script setup>
 import { computed, reactive, ref, watch } from 'vue'
-import { NButton, NCheckbox, NInput, NInputNumber, NModal, NSelect, useDialog, useMessage } from 'naive-ui'
+import { NButton, NCheckbox, NInput, NInputNumber, NModal, NSelect, useMessage } from 'naive-ui'
 import { Plus, Save as SaveIcon, Table2, Trash2, X } from 'lucide-vue-next'
 import { api } from '../api'
 import { createTable, parseTable, resizeTable, serializeTable } from '../tableField'
@@ -16,7 +16,6 @@ const props = defineProps({
 })
 const emit = defineEmits(['close', 'saved'])
 const message = useMessage()
-const dialog = useDialog()
 const saving = ref(false)
 const error = ref('')
 const form = reactive({ project_id: null, category_id: null, title: '', environment: '', content: '' })
@@ -64,23 +63,24 @@ watch(
 )
 
 function addField(label = '', field_type = 'text') {
-  fields.value.push({ label, field_type, is_sensitive: field_type === 'password', value: '', keep_existing: false })
+  fields.value.push({
+    label,
+    field_type,
+    is_sensitive: field_type === 'password',
+    value: field_type === 'table' ? serializeTable(createTable()) : '',
+    keep_existing: false,
+  })
 }
 
 function changeFieldType(field, type) {
   if (type === field.field_type) return
-  const apply = () => {
-    if (type === 'table' || field.field_type === 'table' || field.keep_existing) {
-      field.value = type === 'table' ? serializeTable(createTable()) : ''
-      field.keep_existing = false
-    }
-    field.field_type = type
-    if (type === 'password') field.is_sensitive = true
-    if (type === 'table') field.is_sensitive = false
+  if (type === 'table' || field.field_type === 'table' || field.keep_existing) {
+    field.value = type === 'table' ? serializeTable(createTable()) : ''
+    field.keep_existing = false
   }
-  if (field.value || field.keep_existing) {
-    dialog.warning({ title: '切换字段类型', content: '切换类型会清空当前字段值。', positiveText: '切换并清空', negativeText: '取消', onPositiveClick: apply })
-  } else apply()
+  field.field_type = type
+  if (type === 'password') field.is_sensitive = true
+  if (type === 'table') field.is_sensitive = false
 }
 
 async function setSensitive(field, checked) {
@@ -214,9 +214,7 @@ async function save() {
         <div class="form-divider"><span>自定义字段</span><n-button size="small" secondary @click="addField()"><template #icon><plus :size="15" /></template>添加字段</n-button></div>
         <div class="quick-fields">
           <n-button size="tiny" tertiary @click="addField('地址', 'url')">+ 地址</n-button>
-          <n-button size="tiny" tertiary @click="addField('账号')">+ 账号</n-button>
-          <n-button size="tiny" tertiary @click="addField('密码', 'password')">+ 密码</n-button>
-          <n-button size="tiny" tertiary @click="addField('谷歌验证码', 'password')">+ 谷歌验证码</n-button>
+          <n-button size="tiny" tertiary @click="addField('账号密码', 'table')">+ 账号密码</n-button>
         </div>
         <div v-for="(field, index) in fields" :key="field.id || index" class="entry-field-editor">
           <n-input v-model:value="field.label" placeholder="字段名称" />
