@@ -14,7 +14,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, select
 
 from .config import Settings
-from .db import initialize_database, make_engine
+from .db import initialize_database, make_engine, seed_category_for_user
 from .models import (
     ArchivedUser,
     AuditLog,
@@ -52,6 +52,7 @@ from .schemas import (
     RoleIn,
     RoleStatusPatch,
     ShareIn,
+    SharePatch,
     SummaryQuery,
     UserPatch,
     UserCreate,
@@ -238,13 +239,15 @@ def category_fields(db: Session, category_id: int) -> list[CategoryField]:
     )
 
 
-def category_out(db: Session, category: Category):
+def category_out(db: Session, category: Category, user_id: int | None = None):
     return {
         "id": category.id,
         "name": category.name,
         "icon": category.icon,
         "sort_order": category.sort_order,
         "is_builtin": category.is_builtin,
+        "owner_id": category.owner_id,
+        "is_owned": user_id is not None and category.owner_id == user_id,
     }
 
 
@@ -278,7 +281,7 @@ def entry_out(db: Session, entry: Entry, user: User, full=False):
         "sheet_json": entry.sheet_json if full else None,
         "has_body": bool(entry.body or entry.sheet_json),
         "fields": fields,
-        "can_edit": bool(project and project.owner_id == user.id),
+        "can_edit": can_edit_project(db, entry.project_id, user),
         "created_by_name": created_by.display_name if created_by else "",
         "updated_by_name": updated_by.display_name if updated_by else "",
         "created_at": entry.created_at,
@@ -291,10 +294,27 @@ def require_entry(db: Session, entry_id: int, user: User, owner=False) -> Entry:
     if entry is None:
         fail(404, "条目不存在")
     if owner:
-        owned_project(db, entry.project_id, user)
+        if not can_edit_project(db, entry.project_id, user):
+            fail(403, "仅项目所有者或编辑权限者可执行此操作")
     else:
         project_access(db, entry.project_id, user)
     return entry
+
+
+def can_edit_project(db: Session, project_id: int, user: User) -> bool:
+    project = db.get(Project, project_id)
+    if project is None:
+        return False
+    if project.owner_id == user.id:
+        return True
+    share = db.exec(
+        select(ProjectShare).where(
+            ProjectShare.project_id == project_id,
+            ProjectShare.user_id == user.id,
+            ProjectShare.role == "edit",
+        )
+    ).first()
+    return share is not None
 
 
 def validate_values(values: list[EntryFieldIn], cipher, existing=None):
@@ -499,6 +519,14 @@ def create_app(settings: Settings | None = None):
     def register(data: RegisterIn, db: Session = Depends(get_db)):
         if not role_enabled(db, "member"):
             fail(409, "成员角色已停用，暂不能申请账号")
+        # 如果有同名已归档用户，先释放它的 username
+        occupied = db.exec(select(User).where(User.username == data.username)).first()
+        if occupied is not None and db.get(ArchivedUser, occupied.id) is not None:
+            occupied.username = f"_archived_{occupied.id}"
+            db.add(occupied)
+            db.flush()
+        elif occupied is not None:
+            fail(409, "用户名已存在")
         user = User(
             username=data.username,
             display_name=data.display_name,
@@ -508,6 +536,9 @@ def create_app(settings: Settings | None = None):
         )
         db.add(user)
         save(db, "用户名已存在")
+        db.refresh(user)
+        seed_category_for_user(db, user.id)
+        db.commit()
         return {"message": "注册已提交，等待管理员启用"}
 
     @app.post("/api/auth/login")
@@ -623,6 +654,14 @@ def create_app(settings: Settings | None = None):
             fail(422, "角色已停用")
         if set(json.loads(role.permissions_json)) - set(permissions_for(db, admin)):
             fail(403, "不能授予超出自身的权限")
+        # 如果有同名已归档用户，先释放它的 username
+        occupied = db.exec(select(User).where(User.username == data.username)).first()
+        if occupied is not None and db.get(ArchivedUser, occupied.id) is not None:
+            occupied.username = f"_archived_{occupied.id}"
+            db.add(occupied)
+            db.flush()
+        elif occupied is not None:
+            fail(409, "用户名已存在")
         target = User(username=data.username, display_name=data.display_name, password_hash=hash_password(data.password), role=data.role, is_active=True)
         db.add(target)
         try:
@@ -709,6 +748,7 @@ def create_app(settings: Settings | None = None):
         if db.exec(select(Project.id).where(Project.owner_id == user_id).limit(1)).first() is not None:
             fail(409, "该用户仍有项目，请先由本人处理项目")
         target.is_active = False
+        target.username = f"_archived_{user_id}"
         db.add(target)
         db.add(ArchivedUser(user_id=user_id))
         for login_session in db.exec(select(LoginSession).where(LoginSession.user_id == user_id)):
@@ -925,7 +965,13 @@ def create_app(settings: Settings | None = None):
         for share in db.exec(select(ProjectShare).where(ProjectShare.project_id == project_id)):
             recipient = db.get(User, share.user_id)
             if recipient:
-                result.append({"id": share.id, "user_id": recipient.id, "username": recipient.username, "display_name": recipient.display_name})
+                result.append({
+                    "id": share.id,
+                    "user_id": recipient.id,
+                    "username": recipient.username,
+                    "display_name": recipient.display_name,
+                    "role": share.role or "view",
+                })
         return result
 
     @app.post("/api/projects/{project_id}/shares", status_code=201)
@@ -934,11 +980,32 @@ def create_app(settings: Settings | None = None):
         recipient = db.exec(select(User).where(User.username == data.username, User.is_active == True)).first()
         if recipient is None or recipient.id == user.id:
             fail(422, "请选择其他已启用成员")
-        share = ProjectShare(project_id=project_id, user_id=recipient.id)
+        share = ProjectShare(project_id=project_id, user_id=recipient.id, role=data.role)
         db.add(share)
-        audit(db, user.id, "share", "project", project_id, project_id, recipient.username)
+        audit(db, user.id, "share", "project", project_id, project_id, f"{recipient.username}({data.role})")
         save(db, "此成员已获得查看权限")
-        return {"id": share.id, "user_id": recipient.id, "username": recipient.username, "display_name": recipient.display_name}
+        return {
+            "id": share.id, "user_id": recipient.id,
+            "username": recipient.username, "display_name": recipient.display_name,
+            "role": data.role,
+        }
+
+    @app.patch("/api/projects/{project_id}/shares/{user_id}")
+    def update_share(project_id: int, user_id: int, data: SharePatch, user: User = Depends(workspace_user), db: Session = Depends(get_db)):
+        owned_project(db, project_id, user)
+        share = db.exec(select(ProjectShare).where(ProjectShare.project_id == project_id, ProjectShare.user_id == user_id)).first()
+        if share is None:
+            fail(404, "分享不存在")
+        old_role = share.role or "view"
+        share.role = data.role
+        db.add(share)
+        audit(db, user.id, "update_share", "project", project_id, project_id, f"user={user_id}: {old_role}->{data.role}")
+        db.commit()
+        return {
+            "id": share.id, "user_id": share.user_id,
+            "role": data.role,
+            "message": "分享权限已更新",
+        }
 
     @app.delete("/api/projects/{project_id}/shares/{user_id}")
     def remove_share(project_id: int, user_id: int, user: User = Depends(workspace_user), db: Session = Depends(get_db)):
@@ -946,60 +1013,87 @@ def create_app(settings: Settings | None = None):
         share = db.exec(select(ProjectShare).where(ProjectShare.project_id == project_id, ProjectShare.user_id == user_id)).first()
         if share is None:
             fail(404, "分享不存在")
+        role = share.role or "view"
         db.delete(share)
-        audit(db, user.id, "revoke_share", "project", project_id, project_id, str(user_id))
+        audit(db, user.id, "revoke_share", "project", project_id, project_id, f"{user_id}({role})")
         db.commit()
-        return {"message": "查看权限已撤销"}
+        return {"message": "分享权限已撤销"}
 
     @app.get("/api/categories")
     def list_categories(user: User = Depends(workspace_user), db: Session = Depends(get_db)):
-        rows = db.exec(select(Category).order_by(Category.sort_order, Category.name)).all()
-        return [category_out(db, row) for row in rows]
+        # 1) 自己的私有分类 + 公共分类；2) 自己可访问项目的 Entry 所使用的分类
+        accessible_projects = select(Project.id).outerjoin(
+            ProjectShare, and_(ProjectShare.project_id == Project.id, ProjectShare.user_id == user.id),
+        ).where(or_(Project.owner_id == user.id, ProjectShare.user_id == user.id))
+        category_ids_in_use = select(Entry.category_id).where(Entry.project_id.in_(accessible_projects))
+        rows = db.exec(
+            select(Category).where(
+                or_(
+                    Category.owner_id == None,
+                    Category.owner_id == user.id,
+                    Category.id.in_(category_ids_in_use),
+                )
+            ).distinct().order_by(Category.sort_order, Category.name)
+        ).all()
+        return [category_out(db, row, user.id) for row in rows]
 
     @app.post("/api/categories", status_code=201)
-    def create_category(data: CategoryIn, admin: User = Depends(require_permission("manage_categories")), db: Session = Depends(get_db)):
-        category = Category(name=data.name, icon=data.icon, sort_order=data.sort_order)
+    def create_category(data: CategoryIn, user: User = Depends(workspace_user), db: Session = Depends(get_db)):
+        category = Category(name=data.name, icon=data.icon, sort_order=data.sort_order, owner_id=user.id)
         db.add(category)
         try:
             db.flush()
         except IntegrityError as exc:
             db.rollback()
             raise HTTPException(status_code=409, detail="分类名称已存在") from exc
-        audit(db, admin.id, "create", "category", category.id, detail=category.name)
+        audit(db, user.id, "create", "category", category.id, detail=category.name)
         save(db, "分类名称已存在")
-        return category_out(db, category)
+        return category_out(db, category, user.id)
 
     @app.get("/api/categories/{category_id}")
     def get_category(category_id: int, user: User = Depends(workspace_user), db: Session = Depends(get_db)):
         category = db.get(Category, category_id)
         if category is None:
             fail(404, "分类不存在")
-        return category_out(db, category)
+        if category.owner_id is not None and category.owner_id != user.id:
+            fail(404, "分类不存在")
+        return category_out(db, category, user.id)
 
     @app.put("/api/categories/{category_id}")
-    def update_category(category_id: int, data: CategoryIn, admin: User = Depends(require_permission("manage_categories")), db: Session = Depends(get_db)):
+    def update_category(category_id: int, data: CategoryIn, user: User = Depends(workspace_user), db: Session = Depends(get_db)):
         category = db.get(Category, category_id)
         if category is None:
             fail(404, "分类不存在")
+        if category.owner_id is None:
+            # 公共分类：管理员可改
+            if "manage_categories" not in permissions_for(db, user):
+                fail(403, "不能修改公共分类")
+        elif category.owner_id != user.id:
+            fail(403, "不能修改他人分类")
         category.name = data.name
         category.icon = data.icon
         category.sort_order = data.sort_order
         db.add(category)
-        audit(db, admin.id, "update", "category", category_id, detail=category.name)
+        audit(db, user.id, "update", "category", category_id, detail=category.name)
         save(db, "分类名称已存在")
-        return category_out(db, category)
+        return category_out(db, category, user.id)
 
     @app.delete("/api/categories/{category_id}")
-    def delete_category(category_id: int, admin: User = Depends(require_permission("manage_categories")), db: Session = Depends(get_db)):
+    def delete_category(category_id: int, user: User = Depends(workspace_user), db: Session = Depends(get_db)):
         category = db.get(Category, category_id)
         if category is None:
             fail(404, "分类不存在")
+        if category.owner_id is None:
+            if "manage_categories" not in permissions_for(db, user):
+                fail(403, "不能删除公共分类")
+        elif category.owner_id != user.id:
+            fail(403, "不能删除他人分类")
         if db.exec(select(Entry.id).where(Entry.category_id == category_id).limit(1)).first() is not None:
             fail(409, "分类仍被使用")
         for field in category_fields(db, category_id):
             db.delete(field)
         db.flush()
-        audit(db, admin.id, "delete", "category", category_id, detail=category.name)
+        audit(db, user.id, "delete", "category", category_id, detail=category.name)
         db.delete(category)
         db.commit()
         return {"message": "分类已删除"}
@@ -1079,7 +1173,8 @@ def create_app(settings: Settings | None = None):
 
     @app.post("/api/entries", status_code=201)
     def create_entry(data: EntryIn, request: Request, user: User = Depends(workspace_user), db: Session = Depends(get_db)):
-        owned_project(db, data.project_id, user)
+        if not can_edit_project(db, data.project_id, user):
+            fail(403, "仅项目所有者或编辑权限者可创建条目")
         if db.get(Category, data.category_id) is None:
             fail(404, "分类不存在")
         stored, body, sheet = [], None, None

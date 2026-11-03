@@ -62,6 +62,7 @@ const shareOpen = ref(false)
 const shares = ref([])
 const availableUsers = ref([])
 const shareUser = ref(null)
+const shareRole = ref('view')
 const auditOpen = ref(false)
 const auditRows = ref([])
 const dragProjectId = ref(null)
@@ -551,11 +552,25 @@ async function addShare() {
   try {
     await api('/projects/' + projectTargetId.value + '/shares', {
       method: 'POST',
-      body: { username: person.username },
+      body: { username: person.username, role: shareRole.value },
     })
     shares.value = await api('/projects/' + projectTargetId.value + '/shares')
     shareUser.value = null
-    message.success('已授予只读权限')
+    shareRole.value = 'view'
+    message.success('已授予' + (shareRole.value === 'edit' ? '编辑' : '只读') + '权限')
+  } catch (cause) {
+    message.error(cause.message)
+  }
+}
+
+async function updateShareRole(userId, role) {
+  try {
+    await api('/projects/' + projectTargetId.value + '/shares/' + userId, {
+      method: 'PATCH',
+      body: { role },
+    })
+    shares.value = await api('/projects/' + projectTargetId.value + '/shares')
+    message.success('权限已更新')
   } catch (cause) {
     message.error(cause.message)
   }
@@ -650,13 +665,13 @@ async function dropProject(targetId = null) {
       <div class="category-module">
         <div class="category-tab-bar">
           <div class="category-tab-list" role="tablist" aria-label="信息分类">
-            <button v-for="category in catalog.categories" :key="category.id" role="tab" :aria-selected="categoryId === category.id" class="category-tab" :class="{ active: categoryId === category.id }" @click="selectCategory(category.id)">{{ category.name }}</button>
+            <button v-for="category in catalog.categories" :key="category.id" role="tab" :aria-selected="categoryId === category.id" class="category-tab" :class="{ active: categoryId === category.id }" @click="selectCategory(category.id)">{{ category.name }}<small v-if="!category.is_owned && category.owner_id !== null" class="category-shared-tag">(共享)</small></button>
             <span v-if="!catalog.categories.length" class="category-empty">暂无分类</span>
           </div>
-          <div v-if="auth.user?.permissions?.includes('manage_categories')" class="category-actions">
+          <div class="category-actions">
             <n-tooltip trigger="hover"><template #trigger><button class="icon-button" aria-label="新建分类" @click="manageCategory('create')"><plus :size="17" /></button></template>新建分类</n-tooltip>
-            <n-tooltip v-if="selectedCategory" trigger="hover"><template #trigger><button class="icon-button" aria-label="编辑分类" @click="manageCategory('edit')"><pencil :size="16" /></button></template>编辑分类</n-tooltip>
-            <n-popconfirm v-if="selectedCategory" positive-text="删除" negative-text="取消" @positive-click="deleteCategory">
+            <n-tooltip v-if="selectedCategory?.is_owned" trigger="hover"><template #trigger><button class="icon-button" aria-label="编辑分类" @click="manageCategory('edit')"><pencil :size="16" /></button></template>编辑分类</n-tooltip>
+            <n-popconfirm v-if="selectedCategory?.is_owned" positive-text="删除" negative-text="取消" @positive-click="deleteCategory">
               <template #trigger><button class="icon-button danger" aria-label="删除分类"><trash2 :size="16" /></button></template>
               分类下有条目时无法删除。确定删除 {{ selectedCategory.name }}？
             </n-popconfirm>
@@ -754,16 +769,17 @@ async function dropProject(targetId = null) {
     </n-modal>
 
     <n-modal v-model:show="shareOpen" preset="card" class="small-modal" title="项目分享">
-      <div class="share-intro">被分享的成员只能查看非敏感信息，不能修改或揭示密钥。</div>
+      <div class="share-intro">只读成员仅查看非敏感信息；编辑成员可增改条目，但不能修改项目设置。</div>
       <div class="share-add">
         <n-select v-model:value="shareUser" filterable placeholder="选择成员" :options="availableUsers.filter((item) => !shares.some((share) => share.user_id === item.id)).map((item) => ({ label: item.display_name + ' · ' + item.username, value: item.id }))" />
+        <n-select v-model:value="shareRole" size="small" style="width: 100px" :options="[{ label: '只读', value: 'view' }, { label: '编辑', value: 'edit' }]" />
         <n-button type="primary" :disabled="!shareUser" @click="addShare"><template #icon><plus :size="16" /></template>添加</n-button>
       </div>
       <div class="share-list">
         <div v-for="share in shares" :key="share.id" class="share-row">
           <span class="avatar small-avatar">{{ share.display_name.slice(0, 1) }}</span>
           <span class="share-person"><strong>{{ share.display_name }}</strong><small>{{ share.username }}</small></span>
-          <n-tag size="small" :bordered="false">只读</n-tag>
+          <n-select :value="share.role || 'view'" size="tiny" style="width: 90px" :options="[{ label: '只读', value: 'view' }, { label: '编辑', value: 'edit' }]" @update:value="(v) => updateShareRole(share.user_id, v)" />
           <n-popconfirm positive-text="撤销" negative-text="取消" @positive-click="revokeShare(share.user_id)">
             <template #trigger><button class="icon-button" :aria-label="'撤销 ' + share.display_name + ' 的权限'"><x :size="17" /></button></template>
             撤销后此成员将无法继续访问该项目。

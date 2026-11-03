@@ -55,6 +55,7 @@ class ProjectShare(SQLModel, table=True):
     id: int | None = Field(default=None, primary_key=True)
     project_id: int = Field(foreign_key="project.id", index=True)
     user_id: int = Field(foreign_key="user.id", index=True)
+    role: str = Field(default="view", max_length=8)
     created_at: datetime = Field(default_factory=utcnow)
 
 
@@ -94,8 +95,11 @@ class MenuItem(SQLModel, table=True):
 
 
 class Category(SQLModel, table=True):
+    __table_args__ = (UniqueConstraint("owner_id", "name"),)
+
     id: int | None = Field(default=None, primary_key=True)
-    name: str = Field(index=True, unique=True, max_length=80)
+    name: str = Field(index=True, max_length=80)
+    owner_id: int | None = Field(default=None, foreign_key="user.id", index=True)
     icon: str | None = Field(default=None, max_length=40)
     sort_order: int = Field(default=0)
     is_builtin: bool = Field(default=False)

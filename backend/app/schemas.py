@@ -7,6 +7,7 @@ USERNAME_PATTERN = re.compile(r"^[a-zA-Z0-9_.-]{3,64}$")
 FIELD_TYPES = {"text", "password", "url", "textarea", "table"}
 ENTRY_KINDS = {"entry", "document", "spreadsheet"}
 SYSTEM_PERMISSIONS = {"view_workspace", "manage_users", "manage_roles", "manage_menus", "manage_categories", "view_logs"}
+SHARE_ROLES = {"view", "edit"}
 ENVIRONMENT_LABELS = {
     "DEV": "开发",
     "TEST": "测试",
@@ -137,11 +138,30 @@ class ProjectPatch(StrictModel):
 
 class ShareIn(StrictModel):
     username: str
+    role: str = "view"
 
     @field_validator("username")
     @classmethod
     def valid_username(cls, value):
         return value.strip().lower()
+
+    @field_validator("role")
+    @classmethod
+    def valid_role(cls, value):
+        if value not in SHARE_ROLES:
+            raise ValueError("权限无效")
+        return value
+
+
+class SharePatch(StrictModel):
+    role: str
+
+    @field_validator("role")
+    @classmethod
+    def valid_role(cls, value):
+        if value not in SHARE_ROLES:
+            raise ValueError("权限无效")
+        return value
 
 
 class CategoryIn(StrictModel):
